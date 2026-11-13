@@ -81,6 +81,16 @@ _CATEGORY_X: frozenset[str] = frozenset(
     }
 )
 
+# Exact SPDX identifiers for the modern License-Expression field. A compound
+# expression, exception, LicenseRef or unfamiliar identifier needs review.
+# The legacy tables above also contain informal names and cannot parse SPDX.
+_SPDX_PERMISSIVE = frozenset({"Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "MIT-0"})
+_SPDX_RESTRICTED = frozenset(
+    f"{family}-{version}-{term}"
+    for family, versions in (("GPL", ("1.0", "2.0", "3.0")), ("LGPL", ("2.0", "2.1", "3.0")), ("AGPL", ("3.0",)))
+    for version in versions
+    for term in ("only", "or-later")
+)
 _NORM_RE = re.compile(r"[-_.]+")
 
 
@@ -125,6 +135,20 @@ def _classify(license_text: str) -> str:
     return "UNKNOWN"
 
 
+def _declared_license(meta: importlib.metadata.PackageMetadata) -> tuple[str, str]:
+    expression = meta.get("License-Expression")
+    if expression is not None:
+        identifier = expression.strip()
+        if identifier in _SPDX_PERMISSIVE:
+            return identifier, "SAFE"
+        if identifier in _SPDX_RESTRICTED:
+            return identifier, "RESTRICTED"
+        return identifier or "UNKNOWN", "UNKNOWN"
+
+    legacy = _license_from_classifiers(meta) or (meta.get("License") or "").strip() or "UNKNOWN"
+    return legacy, _classify(legacy)
+
+
 def _scan_direct_deps(direct_dep_names: frozenset[str]) -> list[dict]:
     results: list[dict] = []
     for dist in importlib.metadata.distributions():
@@ -135,15 +159,13 @@ def _scan_direct_deps(direct_dep_names: frozenset[str]) -> list[dict]:
         if _normalize(name) not in direct_dep_names:
             continue
         version: str = meta["Version"] or "unknown"
-        license_str = (
-            _license_from_classifiers(meta) or (meta["License"] or "")
-        ).strip() or "UNKNOWN"
+        license_str, classification = _declared_license(meta)
         results.append(
             {
                 "package": name,
                 "version": version,
                 "license": license_str,
-                "classification": _classify(license_str),
+                "classification": classification,
             }
         )
     return sorted(results, key=lambda r: r["package"].lower())
@@ -186,6 +208,7 @@ def main() -> int:
         print("None of the declared dependencies are currently installed.")
         return 0
 
+    print("Scope: declared licenses of installed direct dependencies. Review bundled component notices separately.")
     _print_table(results)
     print()
 
@@ -208,7 +231,7 @@ def main() -> int:
             print(f"   {r['package']} {r['version']}  ->  {r['license']}")
         print()
         print("   Verify each against https://www.apache.org/legal/resolved.html")
-        print("   If safe, add the license string to _CATEGORY_A in this script.")
+        print("   Review unfamiliar identifiers, compound expressions and applicable exceptions individually.")
         print()
 
     print(
