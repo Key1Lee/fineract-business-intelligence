@@ -81,6 +81,32 @@ _CATEGORY_X: frozenset[str] = frozenset(
     }
 )
 
+# Exact SPDX identifiers for the modern License-Expression field. A compound
+# expression, exception, LicenseRef or unfamiliar identifier needs review.
+# The legacy tables above also contain informal names and cannot parse SPDX.
+_SPDX_PERMISSIVE = frozenset({"Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "MIT-0", "PSF-2.0"})
+
+# SPDX uses both current and deprecated identifiers for these licenses.
+_SPDX_GNU = frozenset(
+    f"{license_id}{suffix}"
+    for license_id in ("AGPL-1.0", "AGPL-3.0", "GPL-1.0", "GPL-2.0", "GPL-3.0", "LGPL-2.0", "LGPL-2.1", "LGPL-3.0")
+    for suffix in ("", "-only", "-or-later")
+)
+_SPDX_RESTRICTED = _SPDX_GNU | {
+    "GPL-1.0+", "GPL-2.0+", "GPL-3.0+", "LGPL-2.0+", "LGPL-2.1+", "LGPL-3.0+",
+    "CDDL-1.0", "CDDL-1.1", "CPL-1.0",
+    "EUPL-1.0", "EUPL-1.1", "EUPL-1.2",
+    "OSL-1.0", "OSL-1.1", "OSL-2.0", "OSL-2.1", "OSL-3.0",
+    "PolyForm-Noncommercial-1.0.0", "copyleft-next-0.3.0", "copyleft-next-0.3.1",
+    "CC-BY-NC-1.0", "CC-BY-NC-2.0", "CC-BY-NC-2.5", "CC-BY-NC-3.0", "CC-BY-NC-4.0",
+    "CC-BY-NC-3.0-DE", "CC-BY-NC-3.0-IGO",
+    "CC-BY-NC-ND-1.0", "CC-BY-NC-ND-2.0", "CC-BY-NC-ND-2.5", "CC-BY-NC-ND-3.0", "CC-BY-NC-ND-4.0",
+    "CC-BY-NC-ND-3.0-DE", "CC-BY-NC-ND-3.0-IGO",
+    "CC-BY-NC-SA-1.0", "CC-BY-NC-SA-2.0", "CC-BY-NC-SA-2.5", "CC-BY-NC-SA-3.0", "CC-BY-NC-SA-4.0",
+    "CC-BY-NC-SA-2.0-DE", "CC-BY-NC-SA-2.0-FR", "CC-BY-NC-SA-2.0-UK", "CC-BY-NC-SA-3.0-DE", "CC-BY-NC-SA-3.0-IGO",
+    "CC-BY-SA-1.0", "CC-BY-SA-2.0", "CC-BY-SA-2.5", "CC-BY-SA-3.0", "CC-BY-SA-4.0",
+    "CC-BY-SA-2.0-UK", "CC-BY-SA-2.1-JP", "CC-BY-SA-3.0-AT", "CC-BY-SA-3.0-DE", "CC-BY-SA-3.0-IGO",
+}
 _NORM_RE = re.compile(r"[-_.]+")
 
 
@@ -125,6 +151,20 @@ def _classify(license_text: str) -> str:
     return "UNKNOWN"
 
 
+def _declared_license(meta: importlib.metadata.PackageMetadata) -> tuple[str, str]:
+    expression = meta.get("License-Expression")
+    if expression is not None:
+        identifier = expression.strip()
+        if identifier in _SPDX_PERMISSIVE:
+            return identifier, "SAFE"
+        if identifier in _SPDX_RESTRICTED:
+            return identifier, "RESTRICTED"
+        return identifier or "UNKNOWN", "UNKNOWN"
+
+    legacy = _license_from_classifiers(meta) or (meta.get("License") or "").strip() or "UNKNOWN"
+    return legacy, _classify(legacy)
+
+
 def _scan_direct_deps(direct_dep_names: frozenset[str]) -> list[dict]:
     results: list[dict] = []
     for dist in importlib.metadata.distributions():
@@ -135,15 +175,13 @@ def _scan_direct_deps(direct_dep_names: frozenset[str]) -> list[dict]:
         if _normalize(name) not in direct_dep_names:
             continue
         version: str = meta["Version"] or "unknown"
-        license_str = (
-            _license_from_classifiers(meta) or (meta["License"] or "")
-        ).strip() or "UNKNOWN"
+        license_str, classification = _declared_license(meta)
         results.append(
             {
                 "package": name,
                 "version": version,
                 "license": license_str,
-                "classification": _classify(license_str),
+                "classification": classification,
             }
         )
     return sorted(results, key=lambda r: r["package"].lower())
@@ -186,6 +224,7 @@ def main() -> int:
         print("None of the declared dependencies are currently installed.")
         return 0
 
+    print("Scope: declared licenses of installed direct dependencies. Review bundled component notices separately.")
     _print_table(results)
     print()
 
@@ -208,7 +247,7 @@ def main() -> int:
             print(f"   {r['package']} {r['version']}  ->  {r['license']}")
         print()
         print("   Verify each against https://www.apache.org/legal/resolved.html")
-        print("   If safe, add the license string to _CATEGORY_A in this script.")
+        print("   Review unfamiliar identifiers, compound expressions and applicable exceptions individually.")
         print()
 
     print(
