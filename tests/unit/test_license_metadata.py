@@ -14,10 +14,11 @@
 # limitations under the License.
 
 from email.message import Message
+from types import SimpleNamespace
 
 import pytest
 
-from scripts.check_licenses import _declared_license
+from scripts import check_licenses
 
 
 @pytest.mark.parametrize(
@@ -27,6 +28,19 @@ from scripts.check_licenses import _declared_license
         ("MIT", "SAFE"),
         ("BSD-3-Clause", "SAFE"),
         ("GPL-3.0-only", "RESTRICTED"),
+        ("AGPL-1.0-or-later", "RESTRICTED"),
+        ("GPL-2.0", "RESTRICTED"),
+        ("LGPL-2.1+", "RESTRICTED"),
+        ("CC-BY-NC-ND-4.0", "RESTRICTED"),
+        ("CC-BY-NC-SA-2.0-UK", "RESTRICTED"),
+        ("CC-BY-SA-3.0", "RESTRICTED"),
+        ("CDDL-1.1", "RESTRICTED"),
+        ("CPL-1.0", "RESTRICTED"),
+        ("OSL-3.0", "RESTRICTED"),
+        ("EUPL-1.2", "RESTRICTED"),
+        ("PolyForm-Noncommercial-1.0.0", "RESTRICTED"),
+        ("copyleft-next-0.3.1", "RESTRICTED"),
+        ("CC-BY-NC-99.0", "UNKNOWN"),
         ("MIT AND GPL-3.0-only", "UNKNOWN"),
         ("MIT OR GPL-3.0-only", "UNKNOWN"),
         ("GPL-2.0-only WITH Classpath-exception-2.0", "UNKNOWN"),
@@ -38,13 +52,34 @@ def test_license_expression_takes_precedence(expression, expected):
     metadata["License-Expression"] = expression
     metadata["License"] = "MIT"
     metadata["Classifier"] = "License :: OSI Approved :: MIT License"
-    assert _declared_license(metadata) == (expression, expected)
+    assert check_licenses._declared_license(metadata) == (expression, expected)
 
 
 def test_pre_pep639_metadata_uses_classifier_or_legacy_license():
     metadata = Message()
-    assert _declared_license(metadata) == ("UNKNOWN", "UNKNOWN")
+    assert check_licenses._declared_license(metadata) == ("UNKNOWN", "UNKNOWN")
     metadata["License"] = "GPL"
-    assert _declared_license(metadata) == ("GPL", "RESTRICTED")
+    assert check_licenses._declared_license(metadata) == ("GPL", "RESTRICTED")
     metadata["Classifier"] = "License :: OSI Approved :: BSD License"
-    assert _declared_license(metadata) == ("BSD License", "SAFE")
+    assert check_licenses._declared_license(metadata) == ("BSD License", "SAFE")
+
+
+@pytest.mark.parametrize(
+    ("expression", "classifier", "exit_code", "summary"),
+    [
+        ("CC-BY-NC-4.0", "License :: Free for non-commercial use", 1, "[FAIL] 1 Category X"),
+        ("PSF-2.0", "License :: OSI Approved :: Python Software Foundation License", 0, "[PASS] 1 safe"),
+    ],
+)
+def test_cli_exit_for_installed_direct_dependency(monkeypatch, capsys, expression, classifier, exit_code, summary):
+    metadata = Message()
+    metadata["Name"] = "example-package"
+    metadata["Version"] = "1.0"
+    metadata["License-Expression"] = expression
+    metadata["Classifier"] = classifier
+    monkeypatch.setattr(check_licenses, "_collect_direct_deps", lambda: {"example-package"})
+    distributions = [SimpleNamespace(metadata=metadata)]
+    monkeypatch.setattr(check_licenses.importlib.metadata, "distributions", lambda: distributions)
+
+    assert check_licenses.main() == exit_code
+    assert summary in capsys.readouterr().out
